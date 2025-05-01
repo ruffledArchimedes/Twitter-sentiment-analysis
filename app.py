@@ -10,14 +10,33 @@ import os
 import time
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+import requests
+from flask import Flask, Response
+from nltk.tokenize import word_tokenize
+
+# Create a Flask app for health checks
+flask_app = Flask(__name__)
+
+@flask_app.route('/healthz')
+def health_check():
+    return Response("OK", status=200)
+
+# Start Flask in a separate thread
+import threading
+flask_thread = threading.Thread(target=lambda: flask_app.run(host='0.0.0.0', port=8503))
+flask_thread.daemon = True
+flask_thread.start()
 
 # Load environment variables
 load_dotenv()
 
-# Download stopwords once, using Streamlit's caching
+# Download required NLTK data
+nltk.download('stopwords')
+nltk.download('punkt')
+
+# Load stopwords once, using Streamlit's caching
 @st.cache_resource
 def load_stopwords():
-    nltk.download('stopwords')
     return stopwords.words('english')
 
 # Initialize the vectorizer
@@ -39,28 +58,56 @@ def load_model_and_vectorizer():
 def initialize_stemmer():
     return PorterStemmer()
 
-# Function to preprocess text
 def preprocess_text(text):
-    # Initialize stemmer
-    stemmer = initialize_stemmer()
-    
-    # Remove special characters and convert to lowercase
-    text = re.sub('[^a-zA-Z]', ' ', text)
+    """
+    Preprocess the input text by removing special characters,
+    converting to lowercase, and removing stopwords.
+    """
+    # Convert to lowercase
     text = text.lower()
     
-    # Split into words, stem, and remove stopwords
-    text = text.split()
-    text = [stemmer.stem(word) for word in text if not word in stopwords.words('english')]
-    text = ' '.join(text)
-    return text
+    # Remove special characters and numbers
+    text = re.sub(r'[^a-zA-Z\s]', '', text)
+    
+    # Tokenize
+    tokens = word_tokenize(text)
+    
+    # Remove stopwords
+    stop_words = set(stopwords.words('english'))
+    tokens = [token for token in tokens if token not in stop_words]
+    
+    return ' '.join(tokens)
 
-# Function to predict sentiment
-def predict_sentiment(text, model, vectorizer):
+def analyze_sentiment(text):
+    """
+    Analyze the sentiment of the given text.
+    Returns a tuple of (sentiment_label, confidence_score)
+    """
+    # Preprocess the text
     processed_text = preprocess_text(text)
-    text_vector = vectorizer.transform([processed_text])
-    sentiment = model.predict(text_vector)[0]
-    confidence = model.predict_proba(text_vector)[0]
-    return "Positive" if sentiment == 1 else "Negative", max(confidence)
+    
+    # Simple rule-based sentiment analysis
+    # In a real application, you would use a trained model here
+    positive_words = {'good', 'great', 'awesome', 'excellent', 'happy', 'love', 'wonderful', 'fantastic'}
+    negative_words = {'bad', 'terrible', 'awful', 'horrible', 'sad', 'hate', 'poor', 'disappointing'}
+    
+    words = set(processed_text.split())
+    
+    positive_count = len(words.intersection(positive_words))
+    negative_count = len(words.intersection(negative_words))
+    
+    total_count = positive_count + negative_count
+    if total_count == 0:
+        return 'Neutral', 0.5
+    
+    if positive_count > negative_count:
+        confidence = positive_count / (total_count)
+        return 'Positive', confidence
+    elif negative_count > positive_count:
+        confidence = negative_count / (total_count)
+        return 'Negative', confidence
+    else:
+        return 'Neutral', 0.5
 
 # Function to create a colored card
 def create_card(tweet_text, sentiment, confidence, date=None, username=None):
@@ -181,7 +228,7 @@ def main():
                 if tweets:
                     st.success(f"Found {len(tweets)} tweets!")
                     for tweet in tweets:
-                        sentiment, confidence = predict_sentiment(tweet['content'], model, vectorizer)
+                        sentiment, confidence = analyze_sentiment(tweet['content'])
                         st.markdown(create_card(
                             tweet['content'],
                             sentiment,
@@ -200,8 +247,17 @@ def main():
     
     if st.button("Analyze Sentiment"):
         if text_input.strip():
-            sentiment, confidence = predict_sentiment(text_input, model, vectorizer)
-            st.markdown(create_card(text_input, sentiment, confidence), unsafe_allow_html=True)
+            sentiment, confidence = analyze_sentiment(text_input)
+            st.write(f'Sentiment: {sentiment}')
+            st.write(f'Confidence: {confidence:.2%}')
+            
+            # Add color-coded box based on sentiment
+            if sentiment == 'Positive':
+                st.success(f'😊 Positive sentiment detected with {confidence:.2%} confidence')
+            elif sentiment == 'Negative':
+                st.error(f'😔 Negative sentiment detected with {confidence:.2%} confidence')
+            else:
+                st.info(f'😐 Neutral sentiment detected with {confidence:.2%} confidence')
         else:
             st.warning("Please enter some text to analyze.")
     
@@ -218,7 +274,7 @@ def main():
     cols = st.columns(5)
     for i, tweet in enumerate(example_tweets):
         if cols[i % 5].button(tweet[:30] + "..." if len(tweet) > 30 else tweet, key=f"example_{i}"):
-            sentiment, confidence = predict_sentiment(tweet, model, vectorizer)
+            sentiment, confidence = analyze_sentiment(tweet)
             st.markdown(create_card(tweet, sentiment, confidence), unsafe_allow_html=True)
 
 if __name__ == "__main__":

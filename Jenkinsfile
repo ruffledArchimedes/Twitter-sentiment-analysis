@@ -1,9 +1,16 @@
 pipeline {
-    agent any
+    agent {
+        docker {
+            image 'python:3.12'
+            args '-v /var/run/docker.sock:/var/run/docker.sock'
+        }
+    }
     
     environment {
         DOCKER_IMAGE = 'twitter-sentiment-analysis'
         DOCKER_TAG = "${env.BUILD_NUMBER}"
+        PYTHON_ENV = "${WORKSPACE}\\.venv"
+        STREAMLIT_PORT = '8502'
     }
     
     stages {
@@ -16,9 +23,12 @@ pipeline {
         stage('Setup Python Environment') {
             steps {
                 sh '''
-                    python -m venv .venv
-                    . .venv/bin/activate
+                    python --version
+                    python -m venv venv
+                    . venv/bin/activate
+                    pip install --upgrade pip
                     pip install -r requirements.txt
+                    python -c "import nltk; nltk.download('stopwords')"
                 '''
             }
         }
@@ -26,8 +36,8 @@ pipeline {
         stage('Run Tests') {
             steps {
                 sh '''
-                    . .venv/bin/activate
-                    python -m pytest tests/
+                    . venv/bin/activate
+                    python -m pytest tests/ --cov=app.py --cov-report=term-missing
                 '''
             }
         }
@@ -35,7 +45,11 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 script {
-                    docker.build("${DOCKER_IMAGE}:${DOCKER_TAG}")
+                    try {
+                        sh 'docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} .'
+                    } catch (Exception e) {
+                        error "Failed to build Docker image: ${e.message}"
+                    }
                 }
             }
         }
@@ -43,9 +57,15 @@ pipeline {
         stage('Push Docker Image') {
             steps {
                 script {
-                    docker.withRegistry('https://registry.hub.docker.com', 'docker-hub-credentials') {
-                        docker.image("${DOCKER_IMAGE}:${DOCKER_TAG}").push()
-                        docker.image("${DOCKER_IMAGE}:${DOCKER_TAG}").push('latest')
+                    try {
+                        withDockerRegistry([credentialsId: 'docker-hub-credentials', url: '']) {
+                            sh '''
+                                docker push ${DOCKER_IMAGE}:${DOCKER_TAG}
+                                docker push ${DOCKER_IMAGE}:latest
+                            '''
+                        }
+                    } catch (Exception e) {
+                        error "Failed to push Docker image: ${e.message}"
                     }
                 }
             }
@@ -54,9 +74,24 @@ pipeline {
         stage('Deploy') {
             steps {
                 sh '''
-                    docker stop twitter-sentiment-analysis || true
-                    docker rm twitter-sentiment-analysis || true
-                    docker run -d -p 8502:8502 --name twitter-sentiment-analysis ${DOCKER_IMAGE}:${DOCKER_TAG}
+                    if docker ps -q --filter "name=twitter-sentiment-analysis" | grep -q . ; then
+                        docker stop twitter-sentiment-analysis
+                        docker rm twitter-sentiment-analysis
+                    fi
+                    
+                    docker run -d \
+                        -p ${STREAMLIT_PORT}:${STREAMLIT_PORT} \
+                        --name twitter-sentiment-analysis \
+                        ${DOCKER_IMAGE}:${DOCKER_TAG}
+                    
+                    # Wait for container to be healthy
+                    sleep 10
+                    
+                    # Verify container is running
+                    if ! docker ps --filter "name=twitter-sentiment-analysis" --format "{{.Status}}" | grep -q "Up"; then
+                        echo "Container failed to start"
+                        exit 1
+                    fi
                 '''
             }
         }
@@ -64,19 +99,15 @@ pipeline {
     
     post {
         always {
-            node('built-in') {
-                cleanWs()
-            }
+            cleanWs()
         }
         success {
-            node('built-in') {
-                echo 'Pipeline completed successfully!'
-            }
+            echo 'Pipeline completed successfully!'
+            echo "Application is running at http://localhost:${STREAMLIT_PORT}"
         }
         failure {
-            node('built-in') {
-                echo 'Pipeline failed!'
-            }
+            echo 'Pipeline failed!'
+            echo 'Check the logs for more details.'
         }
     }
 } 

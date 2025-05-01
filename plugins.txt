@@ -1,0 +1,11 @@
+git:latest
+github:latest
+workflow-aggregator:latest
+pipeline-model-definition:latest
+docker-workflow:latest
+credentials:latest
+credentials-binding:latest
+matrix-auth:latest
+role-strategy:latest
+authorize-project:latest
+configuration-as-code:latest 
