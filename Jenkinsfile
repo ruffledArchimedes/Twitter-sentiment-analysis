@@ -1,5 +1,10 @@
 pipeline {
-    agent any
+    agent {
+        docker {
+            image 'python:3.11'
+            args '-v /var/run/docker.sock:/var/run/docker.sock'
+        }
+    }
     
     environment {
         DOCKER_IMAGE = 'twitter-sentiment-analysis'
@@ -17,7 +22,7 @@ pipeline {
             steps {
                 sh '''
                     python -m venv .venv
-                    source .venv/bin/activate
+                    . .venv/bin/activate
                     pip install -r requirements.txt
                 '''
             }
@@ -26,7 +31,7 @@ pipeline {
         stage('Run Tests') {
             steps {
                 sh '''
-                    source .venv/bin/activate
+                    . .venv/bin/activate
                     python -m pytest tests/
                 '''
             }
