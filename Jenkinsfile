@@ -1,10 +1,5 @@
 pipeline {
-    agent {
-        docker {
-            image 'python:3.11'
-            args '-v /var/run/docker.sock:/var/run/docker.sock'
-        }
-    }
+    agent any
     
     environment {
         DOCKER_IMAGE = 'twitter-sentiment-analysis'
@@ -69,13 +64,19 @@ pipeline {
     
     post {
         always {
-            cleanWs()
+            node('built-in') {
+                cleanWs()
+            }
         }
         success {
-            echo 'Pipeline completed successfully!'
+            node('built-in') {
+                echo 'Pipeline completed successfully!'
+            }
         }
         failure {
-            echo 'Pipeline failed!'
+            node('built-in') {
+                echo 'Pipeline failed!'
+            }
         }
     }
 } 
