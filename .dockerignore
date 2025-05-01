@@ -20,5 +20,4 @@ coverage.xml
 .pytest_cache
 .DS_Store
 .env
-*.pkl
 training.1600000.processed.noemoticon.csv
