@@ -1,0 +1,30 @@
+version: "3.8"
+
+services:
+  twitter-sentiment:
+    image: xanderbilla/sentiment-analysis-app
+    ports:
+      - "8500:8502"
+    deploy:
+      replicas: 3
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    networks:
+      - sentiment-network
+
+networks:
+  sentiment-network:
+    driver: overlay
