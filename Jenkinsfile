@@ -1,98 +1,85 @@
 pipeline {
-    agent {
-        docker {
-            image 'python:3.12'
-            args '-v /var/run/docker.sock:/var/run/docker.sock'
-        }
-    }
+    agent any
     
     environment {
-        DOCKER_IMAGE = 'twitter-sentiment-analysis'
-        DOCKER_TAG = "${env.BUILD_NUMBER}"
-        PYTHON_ENV = "${WORKSPACE}\\.venv"
+        PYTHON_ENV = "${WORKSPACE}/.venv"
         STREAMLIT_PORT = '8502'
     }
     
     stages {
-        stage('Checkout') {
+        stage('Setup Python') {
             steps {
-                checkout scm
+                script {
+                    if (isUnix()) {
+                        sh '''
+                            python3 -m venv .venv
+                            . .venv/bin/activate
+                            python3 -m pip install --upgrade pip
+                        '''
+                    } else {
+                        bat '''
+                            python -m venv .venv
+                            .venv\\Scripts\\activate.bat
+                            python -m pip install --upgrade pip
+                        '''
+                    }
+                }
             }
         }
-        
-        stage('Setup Python Environment') {
+
+        stage('Install Dependencies') {
             steps {
-                sh '''
-                    python --version
-                    python -m venv venv
-                    . venv/bin/activate
-                    pip install --upgrade pip
-                    pip install -r requirements.txt
-                    python -c "import nltk; nltk.download('stopwords')"
-                '''
+                script {
+                    if (isUnix()) {
+                        sh '''
+                            . .venv/bin/activate
+                            pip install streamlit==1.31.1 nltk==3.8.1 scikit-learn==1.4.1.post1 pandas==2.2.1 numpy==1.26.4 pytest==8.0.2 pytest-cov==4.1.0
+                            python -c "import nltk; nltk.download('stopwords'); nltk.download('punkt')"
+                        '''
+                    } else {
+                        bat '''
+                            .venv\\Scripts\\activate.bat
+                            pip install streamlit==1.31.1 nltk==3.8.1 scikit-learn==1.4.1.post1 pandas==2.2.1 numpy==1.26.4 pytest==8.0.2 pytest-cov==4.1.0
+                            python -c "import nltk; nltk.download('stopwords'); nltk.download('punkt')"
+                        '''
+                    }
+                }
             }
         }
-        
+
         stage('Run Tests') {
             steps {
-                sh '''
-                    . venv/bin/activate
-                    python -m pytest tests/ --cov=app.py --cov-report=term-missing
-                '''
-            }
-        }
-        
-        stage('Build Docker Image') {
-            steps {
                 script {
-                    try {
-                        sh 'docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} .'
-                    } catch (Exception e) {
-                        error "Failed to build Docker image: ${e.message}"
+                    if (isUnix()) {
+                        sh '''
+                            . .venv/bin/activate
+                            python -m pytest tests/ -v
+                        '''
+                    } else {
+                        bat '''
+                            .venv\\Scripts\\activate.bat
+                            python -m pytest tests/ -v
+                        '''
                     }
                 }
             }
         }
-        
-        stage('Push Docker Image') {
+
+        stage('Build Application') {
             steps {
                 script {
-                    try {
-                        withDockerRegistry([credentialsId: 'docker-hub-credentials', url: '']) {
-                            sh '''
-                                docker push ${DOCKER_IMAGE}:${DOCKER_TAG}
-                                docker push ${DOCKER_IMAGE}:latest
-                            '''
-                        }
-                    } catch (Exception e) {
-                        error "Failed to push Docker image: ${e.message}"
+                    if (isUnix()) {
+                        sh '''
+                            . .venv/bin/activate
+                            streamlit run app.py --server.port=${STREAMLIT_PORT} &
+                        '''
+                    } else {
+                        bat '''
+                            .venv\\Scripts\\activate.bat
+                            start /B streamlit run app.py --server.port=%STREAMLIT_PORT%
+                        '''
                     }
                 }
-            }
-        }
-        
-        stage('Deploy') {
-            steps {
-                sh '''
-                    if docker ps -q --filter "name=twitter-sentiment-analysis" | grep -q . ; then
-                        docker stop twitter-sentiment-analysis
-                        docker rm twitter-sentiment-analysis
-                    fi
-                    
-                    docker run -d \
-                        -p ${STREAMLIT_PORT}:${STREAMLIT_PORT} \
-                        --name twitter-sentiment-analysis \
-                        ${DOCKER_IMAGE}:${DOCKER_TAG}
-                    
-                    # Wait for container to be healthy
-                    sleep 10
-                    
-                    # Verify container is running
-                    if ! docker ps --filter "name=twitter-sentiment-analysis" --format "{{.Status}}" | grep -q "Up"; then
-                        echo "Container failed to start"
-                        exit 1
-                    fi
-                '''
             }
         }
     }
